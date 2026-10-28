@@ -1,0 +1,856 @@
+{
+  "name": "AI Localization Factory",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        176
+      ],
+      "id": "9aef9cc3-6846-4528-baf5-74ad95590e72",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Localization Factory – Demo"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "products",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "new"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        144,
+        0
+      ],
+      "id": "b34c22fc-a443-43c0-9c7a-bfaa1b1e7086",
+      "name": "Get Products"
+    },
+    {
+      "parameters": {
+        "maxItems": 5
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        272,
+        176
+      ],
+      "id": "85802191-b7aa-4c0c-85b5-08ae3ffb978a",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"seo_title\": \"English Lavender 'Hidcote' – Deep Violet Lavender Plant, 2 L Pot\",\n  \"meta_title\": \"Hidcote Lavender Plant in 2 L Pot | Garden Store\",\n  \"meta_description\": \"English lavender 'Hidcote' with deep violet flowers from June to August. Hardy down to −20 °C, loves full sun.\",\n  \"alt_text\": \"English lavender 'Hidcote' with deep violet flower spikes in a 2 L nursery pot\",\n  \"bullets\": [\n    \"Deep violet flowers from June to August\",\n    \"Grows 40–50 cm tall\",\n    \"Hardy down to −20 °C, thrives in full sun\"\n  ],\n  \"description_html\": \"<p>...</p><ul><li>...</li></ul>\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        192
+      ],
+      "id": "59d74119-ad2d-48f4-ad6f-990b1ef91258",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Localization Factory – Demo"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "glossary",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        704,
+        112
+      ],
+      "id": "df6b800f-75c2-44f5-9a79-8d60deab0d00",
+      "name": "Get Glossary",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// One job per product × language, with that language's glossary rules attached.\nconst LANGS = { DE: 'German', FR: 'French', PL: 'Polish', ES: 'Spanish', IT: 'Italian' };\n\nconst parse = o => (typeof o === 'string' ? JSON.parse(o) : o);\nconst products = $('Limit').all().map(i => i.json);\nconst enriched = $('Enrich EN').all().map(i => parse(i.json.output ?? i.json));\nconst glossary = $('Get Glossary').all().map(i => i.json);\n\nconst keepTerms = glossary.filter(g => g.rule === 'keep').map(g => g.term_en);\n\nconst jobs = [];\nproducts.forEach((p, idx) => {\n  const en = enriched[idx];\n  for (const [code, name] of Object.entries(LANGS)) {\n    const fixed = glossary\n      .filter(g => g.rule === 'fixed' && g[code])\n      .map(g => ({ en: g.term_en, target: g[code] }));\n    jobs.push({\n      json: {\n        sku: p.sku,\n        name_en: p.name_en,\n        specs: p.specs,\n        keywords_en: p.keywords_en,\n        lang: code,\n        lang_name: name,\n        en,\n        en_json: JSON.stringify(en),\n        keep_terms: keepTerms,\n        fixed_terms: fixed,\n        glossary_text: [\n          'Never translate: ' + keepTerms.join(', '),\n          ...fixed.map(f => `Always translate \"${f.en}\" as \"${f.target}\"`),\n        ].join('\\n'),\n      },\n    });\n  }\n});\nreturn jobs;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        16
+      ],
+      "id": "03b7b95d-9114-47ff-a507-69c875e84ab8",
+      "name": "Build Language Jobs"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an e-commerce copywriter for an online garden store that sells across Europe.\nWrite English product content for the product below.\n\nProduct:\n- SKU: {{ $json.sku }}\n- Type: {{ $json.product_type }}\n- Name: {{ $json.name_en }}\n- Specs: {{ $json.specs }}\n- Target keywords (first one is the main keyword): {{ $json.keywords_en }}\n\nRules:\n1. Use ONLY facts from Name and Specs. Never invent features, sizes, materials, origins, awards or guarantees.\n2. Keep cultivar names in single quotes exactly as given (for example 'Hidcote'). Keep botanical Latin names unchanged.\n3. Keep metric units and numbers exactly as in Specs.\n4. Use the main keyword once in seo_title, once in meta_title and naturally in the description. No keyword stuffing.\n5. Tone: friendly, expert, concrete. No hype words like \"amazing\", \"best ever\", \"must-have\".\n6. Length limits are strict:\n   - seo_title: max 70 characters\n   - meta_title: max 60 characters\n   - meta_description: max 155 characters\n   - alt_text: max 125 characters, describe what a product photo would show\n   - bullets: exactly 3, each max 90 characters\n   - description_html: 80–130 words, HTML with <p> and one <ul> only\n\nReturn only the JSON object, no extra text.",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": []
+        },
+        "batching": {
+          "batchSize": 1,
+          "delayBetweenBatches": 4000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        400,
+        16
+      ],
+      "id": "a338dadd-e111-4386-8723-881cee97bfea",
+      "name": "Enrich EN",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a native {{ $json.lang_name }} e-commerce copywriter and SEO specialist for a garden store.\nAdapt (do not translate word for word) this English product content for shoppers in a {{ $json.lang_name }}-speaking country.\n\nEnglish source (JSON):\n{{ $json.en_json }}\n\nProduct facts (the only facts you may use):\nName: {{ $json.name_en }}\nSpecs: {{ $json.specs }}\nEnglish target keywords: {{ $json.keywords_en }}\n\nGlossary (mandatory):\n{{ $json.glossary_text }}\n\nRules:\n1. Use only facts from the source and the specs. Never add new claims.\n2. Keep every number and metric unit. Use the local decimal separator if needed (1.5 L -> 1,5 L).\n3. \"Never translate\" terms must appear exactly as written. Cultivar names always stay in single quotes, exactly like in the source ('Hidcote', 'Gloria Dei'). \"Always translate\" terms must use exactly the given translation; change the ending only if grammar requires it.\n4. In local_keywords give 3 phrases a shopper in that country would actually type into Google. Use the first one in seo_title, meta_title and the description.\n5. Write 100% in {{ $json.lang_name }}. Never leave English words or English common names (like \"English Lavender\" or \"Peace rose\") in the text; use the local common name instead. Only \"Never translate\" terms stay as they are.\n6. Tone: expert and concrete. No hype words (in any language: \"amazing\", \"wunderschön\", \"superbe\", \"piękny\", \"meraviglioso\" and similar).\n7. Strict limits: seo_title max 65 characters, meta_title max 55, meta_description max 150, alt_text max 120, bullets exactly 3 (each max 80), description_html 80–130 words using only <p>, <ul>, <li>.\n\nReturn only the JSON object.",
+        "hasOutputParser": true,
+        "batching": {
+          "batchSize": 1,
+          "delayBetweenBatches": 4000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1040,
+        144
+      ],
+      "id": "29a09651-1ca7-4f21-993b-b7533164d5ca",
+      "name": "Localize",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"seo_title\": \"Lavendel 'Hidcote' – Echter Lavendel mit dunkelvioletten Blüten, 2 L\",\n  \"meta_title\": \"Lavendel 'Hidcote' kaufen | Echter Lavendel im 2-L-Topf\",\n  \"meta_description\": \"Echter Lavendel 'Hidcote' mit dunkelvioletten Blüten von Juni bis August. Winterhart bis −20 °C, für volle Sonne.\",\n  \"alt_text\": \"Lavendel 'Hidcote' mit dunkelvioletten Blütenähren im 2-L-Topf\",\n  \"bullets\": [\"Dunkelviolette Blüten von Juni bis August\", \"Wuchshöhe 40–50 cm\", \"Winterhart bis −20 °C, liebt volle Sonne\"],\n  \"description_html\": \"<p>...</p><ul><li>...</li></ul>\",\n  \"local_keywords\": [\"lavendel hidcote\", \"echter lavendel kaufen\", \"lavendel pflanze\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1184,
+        272
+      ],
+      "id": "ae9c122f-d678-4af8-a4e1-36f2350abefc",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rule checks that need no AI: lengths, glossary terms, HTML tags.\nconst LIMITS = { seo_title: 70, meta_title: 60, meta_description: 155, alt_text: 125 };\nconst norm = s => String(s ?? '').toLowerCase().replace(/[‘’`]/g, \"'\");\n// Rough stem so inflected forms still match (samonawadniająca -> samonawadniającej).\nconst stem = t => { const s = norm(t); return s.length > 6 ? s.slice(0, -2) : s; };\nconst parse = o => (typeof o === 'string' ? JSON.parse(o) : o);\n\nconst jobs = $('Build Language Jobs').all().map(i => i.json);\n\nreturn $input.all().map((item, idx) => {\n  const job = jobs[idx];\n  const out = parse(item.json.output ?? item.json);\n  // Unwrap inline tags (<em>, <strong>, ...) instead of failing on them: the text stays, the markup goes.\n  out.description_html = String(out.description_html ?? '').replace(/<\\/?(em|strong|b|i|span)\\b[^>]*>/gi, '');\n  const issues = [];\n\n  for (const [field, max] of Object.entries(LIMITS)) {\n    const len = String(out[field] ?? '').length;\n    if (!len) issues.push(`${field}: empty`);\n    else if (len > max) issues.push(`${field}: ${len}/${max} chars`);\n  }\n  const bullets = Array.isArray(out.bullets) ? out.bullets : [];\n  if (bullets.length !== 3) issues.push(`bullets: ${bullets.length} instead of 3`);\n  bullets.forEach((b, n) => { if (b.length > 90) issues.push(`bullet ${n + 1}: ${b.length}/90 chars`); });\n\n  const enText = norm(job.en_json);\n  const localText = norm(JSON.stringify(out));\n  for (const term of job.keep_terms) {\n    if (enText.includes(norm(term)) && !localText.includes(norm(term))) {\n      issues.push(`glossary: \"${term}\" missing or translated`);\n    } else if (enText.includes(`'${norm(term)}'`) && !localText.includes(`'${norm(term)}'`)) {\n      issues.push(`glossary: cultivar '${term}' lost its quotes`);\n    }\n  }\n  for (const f of job.fixed_terms) {\n    if (enText.includes(norm(f.en)) && !localText.includes(stem(f.target))) {\n      issues.push(`glossary: \"${f.en}\" should be \"${f.target}\"`);\n    }\n  }\n\n  const html = String(out.description_html ?? '');\n  const tags = html.match(/<\\/?[a-z0-9]+/gi) ?? [];\n  const unexpected = [...new Set(tags.filter(t => !/^<\\/?(p|ul|li)$/i.test(t)))];\n  if (unexpected.length) issues.push(`html: unexpected tags ${unexpected.join(' ')}`);\n  for (const t of ['p', 'ul', 'li']) {\n    const open = (html.match(new RegExp(`<${t}[\\\\s>]`, 'gi')) ?? []).length;\n    const close = (html.match(new RegExp(`</${t}>`, 'gi')) ?? []).length;\n    if (open !== close) issues.push(`html: <${t}> opened ${open}, closed ${close}`);\n  }\n\n  return {\n    json: {\n      ...job,\n      local: out,\n      local_json: JSON.stringify(out),\n      validation_issues: issues,\n      validation_ok: issues.length === 0,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        176
+      ],
+      "id": "1abf0ada-d4fe-416f-9bdc-25eda45eddc7",
+      "name": "Validate"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a strict localization QA reviewer for an e-commerce store.\nTarget language: {{ $json.lang_name }}\n\nEnglish source:\n{{ $json.en_json }}\n\nLocalized version:\n{{ $json.local_json }}\n\nIssues already found by automatic checks: {{ $json.validation_issues.join('; ') || 'none' }}\n\nDo this:\n1. Back-translate the localized description_html into plain English (no HTML).\n2. Compare it with the English source: is any meaning lost, changed or added?\n3. Check that the text sounds natural to a native shopper: grammar, spelling, word choice.\n4. Check facts: numbers, units, cultivar names and glossary terms.\n\nScore from 1 to 5: 5 = ready to publish, 4 = minor style notes only, 3 or lower = needs a human.\nList concrete issues in English (empty list if none).\nReturn only the JSON object.",
+        "hasOutputParser": true,
+        "batching": {
+          "batchSize": 1,
+          "delayBetweenBatches": 4000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1456,
+        32
+      ],
+      "id": "dc9fe5cf-65ba-4742-be6e-8dc1ed935955",
+      "name": "QA Judge",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"score\": 4,\n  \"issues\": [\"meta_description repeats the product name twice\"],\n  \"back_translation\": \"English lavender 'Hidcote' with deep violet flowers...\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1632,
+        176
+      ],
+      "id": "db99647e-f30e-4f19-9cc1-67760788b187",
+      "name": "Structured Output Parser2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten everything into one sheet row per product × language and set its status.\nconst parse = o => (typeof o === 'string' ? JSON.parse(o) : o);\nconst validated = $('Validate').all().map(i => i.json);\n\nreturn $input.all().map((item, idx) => {\n  const v = validated[idx];\n  const qa = parse(item.json.output ?? item.json);\n  const l = v.local;\n  const ok = v.validation_ok && Number(qa.score) >= 4;\n  return {\n    json: {\n      sku: v.sku,\n      lang: v.lang,\n      seo_title: l.seo_title,\n      meta_title: l.meta_title,\n      meta_description: l.meta_description,\n      alt_text: l.alt_text,\n      bullets: (l.bullets ?? []).join(' | '),\n      description_html: l.description_html,\n      local_keywords: (l.local_keywords ?? []).join(' | '),\n      qa_score: qa.score,\n      qa_issues: (qa.issues ?? []).join(' | '),\n      back_translation: qa.back_translation,\n      validation_issues: v.validation_issues.join(' | '),\n      status: ok ? 'done' : 'needs_review',\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        144
+      ],
+      "id": "df594321-62f1-40ac-9cf5-0d177a70731b",
+      "name": "Decide Status"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Localization Factory – Demo"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Results",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "lang",
+              "displayName": "lang",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "seo_title",
+              "displayName": "seo_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "meta_title",
+              "displayName": "meta_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "meta_description",
+              "displayName": "meta_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "alt_text",
+              "displayName": "alt_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "bullets",
+              "displayName": "bullets",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "description_html",
+              "displayName": "description_html",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "local_keywords",
+              "displayName": "local_keywords",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "qa_score",
+              "displayName": "qa_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "qa_issues",
+              "displayName": "qa_issues",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "back_translation",
+              "displayName": "back_translation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_issues",
+              "displayName": "validation_issues",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1856,
+        -80
+      ],
+      "id": "1f319e9f-ddc7-4f6b-9652-ae96bb01cbb8",
+      "name": "Save Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One status per product: done only if all its languages are done.\nconst bySku = {};\nfor (const { json } of $input.all()) {\n  const prev = bySku[json.sku];\n  bySku[json.sku] = prev === 'needs_review' || json.status === 'needs_review' ? 'needs_review' : 'done';\n}\nreturn Object.entries(bySku).map(([sku, status]) => ({ json: { sku, status } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        336
+      ],
+      "id": "fd148c56-bf9d-4953-bb50-d336e0a6aa4f",
+      "name": "Product Status"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Localization Factory – Demo"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "products",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "sku": "={{ $json.sku }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "sku"
+          ],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "product_type",
+              "displayName": "product_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name_en",
+              "displayName": "name_en",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "specs",
+              "displayName": "specs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "keywords_en",
+              "displayName": "keywords_en",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1856,
+        448
+      ],
+      "id": "78fc3835-cbb2-4538-a9d0-c5bca0c9e79f",
+      "name": "Update Products"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Magento 2 import: one row per product per store view, only rows that passed QA.\n// store_view_code must match the store view codes in Magento (Stores > All Stores).\nconst STORE_VIEW = { DE: 'de', FR: 'fr', PL: 'pl', ES: 'es', IT: 'it' };\n\nreturn $input.all()\n  .filter(({ json }) => json.status === 'done')\n  .map(({ json: r }) => ({\n    json: {\n      sku: r.sku,\n      store_view_code: STORE_VIEW[r.lang],\n      name: r.seo_title,\n      description: r.description_html,\n      short_description: '<ul>' + r.bullets.split(' | ').map(b => `<li>${b}</li>`).join('') + '</ul>',\n      meta_title: r.meta_title,\n      meta_description: r.meta_description,\n      meta_keywords: r.local_keywords.split(' | ').join(', '),\n    },\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        64
+      ],
+      "id": "744329fc-e5f8-469f-a4ec-d35b89f9d525",
+      "name": "Magento Rows"
+    },
+    {
+      "parameters": {
+        "options": {
+          "fileName": "magento-import.csv"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2224,
+        64
+      ],
+      "id": "1aa3b3d4-f5b3-4cec-98ef-47f58129d935",
+      "name": "Magento CSV"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shopify translations CSV structure. In a real store Identification is the product ID\n// from the store's own translation export; in this demo the SKU is a placeholder.\nconst FIELDS = {\n  title: 'seo_title',\n  body_html: 'description_html',\n  meta_title: 'meta_title',\n  meta_description: 'meta_description',\n};\n\nconst rows = [];\nfor (const { json: r } of $input.all()) {\n  if (r.status !== 'done') continue;\n  for (const [field, key] of Object.entries(FIELDS)) {\n    rows.push({\n      json: {\n        'Type': 'PRODUCT',\n        'Identification': `SKU:${r.sku}`,\n        'Field': field,\n        'Locale': r.lang.toLowerCase(),\n        'Market': '',\n        'Status': '',\n        'Default content': '',\n        'Translated content': r[key],\n      },\n    });\n  }\n}\nreturn rows;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        240
+      ],
+      "id": "3351814a-a04a-448e-9c75-c75bc24c0c9d",
+      "name": "Shopify Rows"
+    },
+    {
+      "parameters": {
+        "options": {
+          "fileName": "shopify-translations.csv"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2240,
+        240
+      ],
+      "id": "9548bba4-4075-4883-af2f-a9e76961c53f",
+      "name": "Shopify CSV"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        176
+      ],
+      "id": "caa61f2c-7580-48e2-8528-d262b7ca4448",
+      "name": "Google Gemini Chat Model"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        304
+      ],
+      "id": "d79d6226-aafb-46e9-b838-9ebbcff3f5a4",
+      "name": "Google Gemini Chat Model1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1472,
+        192
+      ],
+      "id": "9056e170-d04f-4b3d-9d7f-8f0eb272e1d1",
+      "name": "Google Gemini Chat Model2"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Enrich EN",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Enrich EN",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Glossary": {
+      "main": [
+        [
+          {
+            "node": "Build Language Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich EN": {
+      "main": [
+        [
+          {
+            "node": "Get Glossary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Language Jobs": {
+      "main": [
+        [
+          {
+            "node": "Localize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Localize",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Localize": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "QA Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser2": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "QA Judge",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QA Judge": {
+      "main": [
+        [
+          {
+            "node": "Decide Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Status": {
+      "main": [
+        [
+          {
+            "node": "Save Results",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Product Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Magento Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Shopify Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product Status": {
+      "main": [
+        [
+          {
+            "node": "Update Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Products": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Magento Rows": {
+      "main": [
+        [
+          {
+            "node": "Magento CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shopify Rows": {
+      "main": [
+        [
+          {
+            "node": "Shopify CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Enrich EN",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Localize",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "QA Judge",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
